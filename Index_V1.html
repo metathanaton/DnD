@@ -2,166 +2,98 @@
 <html lang="fr">
 <head>
   <meta charset="UTF-8" />
-  <title>Gestion de Personnages - JDR</title>
+  <title>Fiche de personnage JDR</title>
   <style>
-    body {
-      font-family: 'Segoe UI', sans-serif;
-      background-color: #121212;
-      color: #f0f0f0;
-      padding: 20px;
-    }
-    .container {
-      max-width: 700px;
-      margin: auto;
-      background: #1e1e1e;
-      padding: 20px;
-      border-radius: 10px;
-      box-shadow: 0 0 10px #000;
-    }
-    h1, h2 {
-      text-align: center;
-      color: #d4af37;
-    }
-    label {
-      display: block;
-      margin-top: 10px;
-    }
-    input, textarea, select {
-      width: 100%;
-      padding: 8px;
-      margin-top: 4px;
-      border: none;
-      border-radius: 4px;
-      background: #2c2c2c;
-      color: #fff;
-    }
-    button {
-      margin-top: 15px;
-      padding: 10px;
-      width: 100%;
-      background-color: #d4af37;
-      color: black;
-      font-size: 16px;
-      border: none;
-      border-radius: 4px;
-      cursor: pointer;
-    }
-    .dice-result {
-      margin-top: 10px;
-      text-align: center;
-      font-size: 1.2em;
-    }
-    .section {
-      margin-top: 20px;
-    }
+    body { font-family: sans-serif; margin: 20px; }
+    table { border-collapse: collapse; width: 100%; margin-bottom: 20px; }
+    td, th { border: 1px solid #aaa; padding: 6px; text-align: center; }
+    input { width: 60px; text-align: center; }
   </style>
 </head>
 <body>
-  <div class="container">
-    <h1>Fiche de Personnage</h1>
 
-    <label>Nom : <input type="text" id="nom" /></label>
-    <label>Race : <input type="text" id="race" /></label>
-    <label>Classe : <input type="text" id="classe" /></label>
+  <h1>Fiche de Personnage</h1>
 
-    <h2>Caractéristiques</h2>
-    <label>Force : <input type="number" id="force" value="10" /></label>
-    <label>Dextérité : <input type="number" id="dexterite" value="10" /></label>
-    <label>Intelligence : <input type="number" id="intelligence" value="10" /></label>
-    <label>Charisme : <input type="number" id="charisme" value="10" /></label>
+  <label>Niveau : <input type="number" id="niveau" value="5" /></label>
+  <label style="margin-left: 20px;">Points de caractéristiques : <input type="number" id="pts_carac" value="0" /></label>
 
-    <div class="section">
-      <h2>Compétences</h2>
-      <textarea id="competences" rows="4" placeholder="Ex: Discrétion, Arc, Magie noire..."></textarea>
-    </div>
+  <h2>Caractéristiques</h2>
+  <table>
+    <tr>
+      <th>Nom</th><th>Valeur</th>
+    </tr>
+    <tr><td>Force</td><td><input type="number" id="force" value="5" /></td></tr>
+    <tr><td>Constitution</td><td><input type="number" id="constitution" value="9" /></td></tr>
+    <tr><td>Dextérité</td><td><input type="number" id="dexterite" value="15" /></td></tr>
+    <tr><td>Sagesse</td><td><input type="number" id="sagesse" value="5" /></td></tr>
+    <tr><td>Intelligence</td><td><input type="number" id="intelligence" value="10" /></td></tr>
+    <tr><td>Charisme</td><td><input type="number" id="charisme" value="14" /></td></tr>
+  </table>
 
-    <div class="section">
-      <h2>Inventaire</h2>
-      <textarea id="inventaire" rows="4" placeholder="Ex: Épée, potion, livre ancien..."></textarea>
-    </div>
+  <h2>Compétences (Dextérité)</h2>
+  <table>
+    <tr><th>Compétence</th><th>Base</th><th>Total</th></tr>
+    <tr>
+      <td>Acrobaties</td>
+      <td><input type="number" id="acrobaties_base" value="10" /></td>
+      <td><span id="acrobaties_total">0</span></td>
+    </tr>
+    <tr>
+      <td>Discrétion</td>
+      <td><input type="number" id="discretion_base" value="12" /></td>
+      <td><span id="discretion_total">0</span></td>
+    </tr>
+    <tr>
+      <td>Escamotage</td>
+      <td><input type="number" id="escamotage_base" value="0" /></td>
+      <td><span id="escamotage_total">0</span></td>
+    </tr>
+  </table>
 
-    <div class="section">
-      <button onclick="sauvegarder()">💾 Sauvegarder le personnage</button>
-      <button onclick="lancerDe()">🎲 Lancer un dé 20</button>
-      <div class="dice-result" id="resultat-de">Résultat : -</div>
-    </div>
-
-    <div class="section">
-      <h2>Personnages enregistrés</h2>
-      <select id="liste-personnages" onchange="charger()">
-        <option value="">-- Sélectionner --</option>
-      </select>
-      <button onclick="supprimer()">🗑️ Supprimer</button>
-    </div>
-  </div>
+  <button onclick="sauvegarder()">💾 Sauvegarder</button>
+  <button onclick="charger()">📂 Charger</button>
 
   <script>
-    function lancerDe() {
-      const result = Math.floor(Math.random() * 20) + 1;
-      document.getElementById("resultat-de").innerText = "Résultat : " + result;
+    function calculerTotal(idBase, idCarac, idTotal) {
+      const base = parseInt(document.getElementById(idBase).value) || 0;
+      const carac = parseInt(document.getElementById(idCarac).value) || 0;
+      document.getElementById(idTotal).textContent = base + Math.floor((carac - 10) / 2);
+    }
+
+    function majComp() {
+      calculerTotal('acrobaties_base', 'dexterite', 'acrobaties_total');
+      calculerTotal('discretion_base', 'dexterite', 'discretion_total');
+      calculerTotal('escamotage_base', 'dexterite', 'escamotage_total');
     }
 
     function sauvegarder() {
-      const nom = document.getElementById("nom").value.trim();
-      if (!nom) return alert("Donne un nom au personnage !");
       const data = {
-        nom,
-        race: document.getElementById("race").value,
-        classe: document.getElementById("classe").value,
-        force: document.getElementById("force").value,
-        dexterite: document.getElementById("dexterite").value,
-        intelligence: document.getElementById("intelligence").value,
-        charisme: document.getElementById("charisme").value,
-        competences: document.getElementById("competences").value,
-        inventaire: document.getElementById("inventaire").value
+        niveau: document.getElementById('niveau').value,
+        force: document.getElementById('force').value,
+        dexterite: document.getElementById('dexterite').value,
+        acrobaties: document.getElementById('acrobaties_base').value,
+        // etc. à compléter
       };
-      localStorage.setItem("jdr_" + nom, JSON.stringify(data));
-      alert("Personnage sauvegardé !");
-      majListe();
+      localStorage.setItem('ficheJDR', JSON.stringify(data));
+      alert("Fiche sauvegardée !");
     }
 
     function charger() {
-      const nom = document.getElementById("liste-personnages").value;
-      if (!nom) return;
-      const data = JSON.parse(localStorage.getItem("jdr_" + nom));
-      if (!data) return;
-      document.getElementById("nom").value = data.nom;
-      document.getElementById("race").value = data.race;
-      document.getElementById("classe").value = data.classe;
-      document.getElementById("force").value = data.force;
-      document.getElementById("dexterite").value = data.dexterite;
-      document.getElementById("intelligence").value = data.intelligence;
-      document.getElementById("charisme").value = data.charisme;
-      document.getElementById("competences").value = data.competences;
-      document.getElementById("inventaire").value = data.inventaire;
+      const data = JSON.parse(localStorage.getItem('ficheJDR'));
+      if (!data) return alert("Aucune fiche sauvegardée.");
+      document.getElementById('niveau').value = data.niveau;
+      document.getElementById('force').value = data.force;
+      document.getElementById('dexterite').value = data.dexterite;
+      document.getElementById('acrobaties_base').value = data.acrobaties;
+      majComp();
     }
 
-    function supprimer() {
-      const nom = document.getElementById("liste-personnages").value;
-      if (!nom) return alert("Aucun personnage sélectionné.");
-      if (confirm("Supprimer " + nom + " ?")) {
-        localStorage.removeItem("jdr_" + nom);
-        majListe();
-        alert("Supprimé !");
-      }
-    }
+    // Auto-calcul quand on change une valeur
+    document.querySelectorAll('input').forEach(input => {
+      input.addEventListener('input', majComp);
+    });
 
-    function majListe() {
-      const select = document.getElementById("liste-personnages");
-      select.innerHTML = '<option value="">-- Sélectionner --</option>';
-      for (let i = 0; i < localStorage.length; i++) {
-        const key = localStorage.key(i);
-        if (key.startsWith("jdr_")) {
-          const nom = key.replace("jdr_", "");
-          const option = document.createElement("option");
-          option.value = nom;
-          option.text = nom;
-          select.appendChild(option);
-        }
-      }
-    }
-
-    window.onload = majListe;
+    majComp(); // initialisation
   </script>
 </body>
 </html>
