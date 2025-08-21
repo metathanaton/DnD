@@ -1,99 +1,715 @@
-<!DOCTYPE html>
-<html lang="fr">
-<head>
-  <meta charset="UTF-8" />
-  <title>Fiche de personnage JDR</title>
-  <style>
-    body { font-family: sans-serif; margin: 20px; }
-    table { border-collapse: collapse; width: 100%; margin-bottom: 20px; }
-    td, th { border: 1px solid #aaa; padding: 6px; text-align: center; }
-    input { width: 60px; text-align: center; }
-  </style>
-</head>
-<body>
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Badge } from "@/components/ui/badge";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { Label } from "@/components/ui/label";
+import { Download, Plus, Upload, Trash2, Dice5, MapPin, Save, FileJson } from "lucide-react";
+import { MapContainer, TileLayer, Marker, Popup } from "react-leaflet";
+import L from "leaflet";
 
-  <h1>Fiche de Personnage</h1>
+// Minimal Leaflet marker icon fix (since default assets may not load in this env)
+const DefaultIcon = new L.Icon({
+  iconUrl:
+    "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png",
+  iconRetinaUrl:
+    "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png",
+  shadowUrl:
+    "https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png",
+  iconSize: [25, 41],
+  iconAnchor: [12, 41],
+  popupAnchor: [1, -34],
+  shadowSize: [41, 41],
+});
+L.Marker.prototype.options.icon = DefaultIcon as any;
 
-  <label>Niveau : <input type="number" id="niveau" value="5" /></label>
-  <label style="margin-left: 20px;">Points de caractéristiques : <input type="number" id="pts_carac" value="0" /></label>
+// Types
+type Caracs = { FOR: number; DEX: number; CON: number; INT: number; SAG: number; CHA: number };
 
-  <h2>Caractéristiques</h2>
-  <table>
-    <tr>
-      <th>Nom</th><th>Valeur</th>
-    </tr>
-    <tr><td>Force</td><td><input type="number" id="force" value="5" /></td></tr>
-    <tr><td>Constitution</td><td><input type="number" id="constitution" value="9" /></td></tr>
-    <tr><td>Dextérité</td><td><input type="number" id="dexterite" value="15" /></td></tr>
-    <tr><td>Sagesse</td><td><input type="number" id="sagesse" value="5" /></td></tr>
-    <tr><td>Intelligence</td><td><input type="number" id="intelligence" value="10" /></td></tr>
-    <tr><td>Charisme</td><td><input type="number" id="charisme" value="14" /></td></tr>
-  </table>
+type Competence = {
+  id: string;
+  nom: string;
+  type: string; // "générale", "martiale", etc.
+  base: number; // valeur de base
+  rang: number; // bonus par rang
+  modif: number; // circonstanciel
+};
 
-  <h2>Compétences (Dextérité)</h2>
-  <table>
-    <tr><th>Compétence</th><th>Base</th><th>Total</th></tr>
-    <tr>
-      <td>Acrobaties</td>
-      <td><input type="number" id="acrobaties_base" value="10" /></td>
-      <td><span id="acrobaties_total">0</span></td>
-    </tr>
-    <tr>
-      <td>Discrétion</td>
-      <td><input type="number" id="discretion_base" value="12" /></td>
-      <td><span id="discretion_total">0</span></td>
-    </tr>
-    <tr>
-      <td>Escamotage</td>
-      <td><input type="number" id="escamotage_base" value="0" /></td>
-      <td><span id="escamotage_total">0</span></td>
-    </tr>
-  </table>
+type Equipement = {
+  id: string;
+  nom: string;
+  type: string; // arme, armure, consommable
+  poids: number;
+  quantite: number;
+  effets?: string;
+  equipe?: boolean;
+  slot?: string;
+};
 
-  <button onclick="sauvegarder()">💾 Sauvegarder</button>
-  <button onclick="charger()">📂 Charger</button>
+type Relation = {
+  id: string;
+  cible: string;
+  type: string; // allié, ennemi, contact
+  intensite: number; // 0-100
+  notes?: string;
+};
 
-  <script>
-    function calculerTotal(idBase, idCarac, idTotal) {
-      const base = parseInt(document.getElementById(idBase).value) || 0;
-      const carac = parseInt(document.getElementById(idCarac).value) || 0;
-      document.getElementById(idTotal).textContent = base + Math.floor((carac - 10) / 2);
+type Jet = {
+  id: string;
+  date: string;
+  cible: string; // compétence ou carac
+  base: number;
+  modif: number;
+  de: string; // d100/d20
+  resultat: number;
+  reussite: boolean;
+  detail: string;
+};
+
+type Lieu = {
+  id: string;
+  nom: string;
+  x: number; // lat
+  y: number; // lng
+  notes?: string;
+};
+
+type Personnage = {
+  id: string;
+  nom: string;
+  classe: string;
+  niveau: number;
+  caracs: Caracs;
+  pvMax: number;
+  pv: number;
+  initiative: number;
+  chargeMax: number;
+  notes?: string;
+  competences: Competence[];
+  equipement: Equipement[];
+  relations: Relation[];
+  jets: Jet[];
+};
+
+function uid() {
+  return crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2);
+}
+
+function loadStore(): { persos: Personnage[]; lieux: Lieu[]; system: "d100" | "d20"; ddBase: number } {
+  try {
+    const raw = localStorage.getItem("rpg_store");
+    if (!raw) return { persos: [], lieux: [], system: "d100", ddBase: 10 };
+    return JSON.parse(raw);
+  } catch {
+    return { persos: [], lieux: [], system: "d100", ddBase: 10 };
+  }
+}
+
+function saveStore(data: any) {
+  localStorage.setItem("rpg_store", JSON.stringify(data));
+}
+
+function calcSeuil(c: Competence) {
+  // règle simple: Base + Rang*5 + Modif
+  return Math.max(0, Math.min(100, c.base + c.rang * 5 + c.modif));
+}
+
+function d(n: number) {
+  return Math.floor(Math.random() * n) + 1;
+}
+
+export default function RPGManagerApp() {
+  const [store, setStore] = useState(loadStore());
+  const [activeId, setActiveId] = useState<string | null>(null);
+  const active = useMemo(
+    () => store.persos.find((p: Personnage) => p.id === activeId) || null,
+    [store, activeId]
+  );
+
+  useEffect(() => {
+    saveStore(store);
+  }, [store]);
+
+  function addPerso() {
+    const p: Personnage = {
+      id: uid(),
+      nom: "Nouveau",
+      classe: "",
+      niveau: 1,
+      caracs: { FOR: 10, DEX: 10, CON: 10, INT: 10, SAG: 10, CHA: 10 },
+      pvMax: 10,
+      pv: 10,
+      initiative: 0,
+      chargeMax: 20,
+      notes: "",
+      competences: [],
+      equipement: [],
+      relations: [],
+      jets: [],
+    };
+    setStore((s: any) => ({ ...s, persos: [...s.persos, p] }));
+    setActiveId(p.id);
+  }
+
+  function removePerso(id: string) {
+    setStore((s: any) => ({ ...s, persos: s.persos.filter((p: Personnage) => p.id !== id) }));
+    if (activeId === id) setActiveId(null);
+  }
+
+  function updateActive(p: Personnage) {
+    setStore((s: any) => ({
+      ...s,
+      persos: s.persos.map((x: Personnage) => (x.id === p.id ? p : x)),
+    }));
+  }
+
+  function exportJSON() {
+    const blob = new Blob([JSON.stringify(store, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `rpg_export_${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-")}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  function importJSON(file: File) {
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const data = JSON.parse(String(reader.result));
+        setStore(data);
+        setActiveId(data.persos?.[0]?.id || null);
+      } catch (e) {
+        alert("Fichier invalide");
+      }
+    };
+    reader.readAsText(file);
+  }
+
+  function lancerJet(
+    cible: string,
+    base: number,
+    modif: number,
+    system: "d100" | "d20" = store.system,
+    ddBase: number = store.ddBase
+  ) {
+    if (!active) return;
+    const id = uid();
+    const now = new Date().toISOString();
+    let resultat = 0;
+    let reussite = false;
+    let detail = "";
+
+    if (system === "d20") {
+      resultat = d(20);
+      const total = resultat + base + modif;
+      reussite = total >= ddBase;
+      detail = `d20=${resultat} + base=${base} + modif=${modif} vs DD=${ddBase} => ${total}`;
+    } else {
+      resultat = d(100);
+      const seuil = base + modif;
+      reussite = resultat <= seuil;
+      detail = `d100=${resultat} <= seuil=${seuil}`;
     }
 
-    function majComp() {
-      calculerTotal('acrobaties_base', 'dexterite', 'acrobaties_total');
-      calculerTotal('discretion_base', 'dexterite', 'discretion_total');
-      calculerTotal('escamotage_base', 'dexterite', 'escamotage_total');
-    }
+    const jet: Jet = {
+      id,
+      date: now,
+      cible,
+      base,
+      modif,
+      de: system === "d20" ? "d20" : "d100",
+      resultat,
+      reussite,
+      detail,
+    };
 
-    function sauvegarder() {
-      const data = {
-        niveau: document.getElementById('niveau').value,
-        force: document.getElementById('force').value,
-        dexterite: document.getElementById('dexterite').value,
-        acrobaties: document.getElementById('acrobaties_base').value,
-        // etc. à compléter
-      };
-      localStorage.setItem('ficheJDR', JSON.stringify(data));
-      alert("Fiche sauvegardée !");
-    }
+    updateActive({ ...active, jets: [jet, ...active.jets] });
+  }
 
-    function charger() {
-      const data = JSON.parse(localStorage.getItem('ficheJDR'));
-      if (!data) return alert("Aucune fiche sauvegardée.");
-      document.getElementById('niveau').value = data.niveau;
-      document.getElementById('force').value = data.force;
-      document.getElementById('dexterite').value = data.dexterite;
-      document.getElementById('acrobaties_base').value = data.acrobaties;
-      majComp();
-    }
+  return (
+    <div className="min-h-screen w-full grid grid-cols-12 gap-4 p-4">
+      <aside className="col-span-3 space-y-3">
+        <Card className="shadow-md rounded-2xl">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-lg">Personnages</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-2">
+            {store.persos.map((p: Personnage) => (
+              <div
+                key={p.id}
+                className={`flex items-center justify-between p-2 rounded-xl border ${
+                  activeId === p.id ? "bg-muted" : ""
+                }`}
+              >
+                <button className="text-left" onClick={() => setActiveId(p.id)}>
+                  <div className="font-medium">{p.nom || "Sans nom"}</div>
+                  <div className="text-xs opacity-70">{p.classe || "classe"} · niv {p.niveau}</div>
+                </button>
+                <Button variant="ghost" size="icon" onClick={() => removePerso(p.id)}>
+                  <Trash2 className="h-4 w-4" />
+                </Button>
+              </div>
+            ))}
+            <Button className="w-full" onClick={addPerso}>
+              <Plus className="h-4 w-4 mr-2" /> Nouveau perso
+            </Button>
+            <div className="grid grid-cols-2 gap-2 pt-2">
+              <Button variant="outline" onClick={exportJSON}>
+                <Download className="h-4 w-4 mr-2" /> Export
+              </Button>
+              <Dialog>
+                <DialogTrigger asChild>
+                  <Button variant="outline">
+                    <Upload className="h-4 w-4 mr-2" /> Import
+                  </Button>
+                </DialogTrigger>
+                <DialogContent>
+                  <DialogHeader>
+                    <DialogTitle>Importer JSON</DialogTitle>
+                  </DialogHeader>
+                  <Input type="file" accept="application/json" onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    if (f) importJSON(f);
+                  }} />
+                </DialogContent>
+              </Dialog>
+            </div>
+            <Card className="mt-3">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-base">Système</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-2">
+                <div className="flex items-center gap-2">
+                  <Label className="w-24">Mode</Label>
+                  <select
+                    className="border rounded-md p-2 w-full"
+                    value={store.system}
+                    onChange={(e) => setStore({ ...store, system: e.target.value as any })}
+                  >
+                    <option value="d100">d100 sous seuil</option>
+                    <option value="d20">d20 vs DD</option>
+                  </select>
+                </div>
+                {store.system === "d20" && (
+                  <div className="flex items-center gap-2">
+                    <Label className="w-24">DD de base</Label>
+                    <Input
+                      type="number"
+                      value={store.ddBase}
+                      onChange={(e) => setStore({ ...store, ddBase: Number(e.target.value) })}
+                    />
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </CardContent>
+        </Card>
+      </aside>
 
-    // Auto-calcul quand on change une valeur
-    document.querySelectorAll('input').forEach(input => {
-      input.addEventListener('input', majComp);
-    });
+      <main className="col-span-9 space-y-4">
+        {active ? (
+          <>
+            <Card className="shadow-md rounded-2xl">
+              <CardContent className="pt-4 grid grid-cols-12 gap-3">
+                <div className="col-span-4 space-y-2">
+                  <Label>Nom</Label>
+                  <Input
+                    value={active.nom}
+                    onChange={(e) => updateActive({ ...active, nom: e.target.value })}
+                  />
+                </div>
+                <div className="col-span-3 space-y-2">
+                  <Label>Classe</Label>
+                  <Input
+                    value={active.classe}
+                    onChange={(e) => updateActive({ ...active, classe: e.target.value })}
+                  />
+                </div>
+                <div className="col-span-2 space-y-2">
+                  <Label>Niveau</Label>
+                  <Input
+                    type="number"
+                    value={active.niveau}
+                    onChange={(e) => updateActive({ ...active, niveau: Number(e.target.value) })}
+                  />
+                </div>
+                <div className="col-span-3 space-y-2">
+                  <Label>Initiative</Label>
+                  <Input
+                    type="number"
+                    value={active.initiative}
+                    onChange={(e) => updateActive({ ...active, initiative: Number(e.target.value) })}
+                  />
+                </div>
 
-    majComp(); // initialisation
-  </script>
-</body>
-</html>
+                {/* Caracs */}
+                {(["FOR", "DEX", "CON", "INT", "SAG", "CHA"] as (keyof Caracs)[]).map((k) => (
+                  <div className="col-span-2 space-y-2" key={String(k)}>
+                    <Label>{k}</Label>
+                    <Input
+                      type="number"
+                      value={active.caracs[k]}
+                      onChange={(e) => updateActive({
+                        ...active,
+                        caracs: { ...active.caracs, [k]: Number(e.target.value) },
+                      })}
+                    />
+                  </div>
+                ))}
+
+                <div className="col-span-2 space-y-2">
+                  <Label>PV Max</Label>
+                  <Input
+                    type="number"
+                    value={active.pvMax}
+                    onChange={(e) => updateActive({ ...active, pvMax: Number(e.target.value) })}
+                  />
+                </div>
+                <div className="col-span-2 space-y-2">
+                  <Label>PV</Label>
+                  <Input
+                    type="number"
+                    value={active.pv}
+                    onChange={(e) => updateActive({ ...active, pv: Number(e.target.value) })}
+                  />
+                </div>
+                <div className="col-span-3 space-y-2">
+                  <Label>Charge max</Label>
+                  <Input
+                    type="number"
+                    value={active.chargeMax}
+                    onChange={(e) => updateActive({ ...active, chargeMax: Number(e.target.value) })}
+                  />
+                </div>
+                <div className="col-span-12 space-y-2">
+                  <Label>Notes</Label>
+                  <Textarea
+                    value={active.notes || ""}
+                    onChange={(e) => updateActive({ ...active, notes: e.target.value })}
+                  />
+                </div>
+              </CardContent>
+            </Card>
+
+            <Tabs defaultValue="competences" className="w-full">
+              <TabsList className="grid grid-cols-6 gap-2">
+                <TabsTrigger value="competences">Compétences</TabsTrigger>
+                <TabsTrigger value="equipement">Équipement</TabsTrigger>
+                <TabsTrigger value="relations">Relations</TabsTrigger>
+                <TabsTrigger value="jets">Jets</TabsTrigger>
+                <TabsTrigger value="map">Carte</TabsTrigger>
+                <TabsTrigger value="json">JSON</TabsTrigger>
+              </TabsList>
+
+              <TabsContent value="competences" className="mt-3">
+                <Card className="rounded-2xl">
+                  <CardHeader className="pb-2">
+                    <CardTitle className="text-base">Compétences</CardTitle>
+                  </CardHeader>
+                  <CardContent className="space-y-2">
+                    {active.competences.map((c) => (
+                      <div key={c.id} className="grid grid-cols-12 gap-2 items-center p-2 border rounded-xl">
+                        <Input
+                          className="col-span-3"
+                          value={c.nom}
+                          onChange={(e) => updateActive({
+                            ...active,
+                            competences: active.competences.map((cc) => cc.id === c.id ? { ...c, nom: e.target.value } : cc),
+                          })}
+                        />
+                        <Input
+                          className="col-span-2"
+                          placeholder="type"
+                          value={c.type}
+                          onChange={(e) => updateActive({
+                            ...active,
+                            competences: active.competences.map((cc) => cc.id === c.id ? { ...c, type: e.target.value } : cc),
+                          })}
+                        />
+                        <Input
+                          type="number"
+                          className="col-span-2"
+                          value={c.base}
+                          onChange={(e) => updateActive({
+                            ...active,
+                            competences: active.competences.map((cc) => cc.id === c.id ? { ...c, base: Number(e.target.value) } : cc),
+                          })}
+                        />
+                        <Input
+                          type="number"
+                          className="col-span-2"
+                          value={c.rang}
+                          onChange={(e) => updateActive({
+                            ...active,
+                            competences: active.competences.map((cc) => cc.id === c.id ? { ...c, rang: Number(e.target.value) } : cc),
+                          })}
+                        />
+                        <Input
+                          type="number"
+                          className="col-span-1"
+                          value={c.modif}
+                          onChange={(e) => updateActive({
+                            ...active,
+                            competences: active.competences.map((cc) => cc.id === c.id ? { ...c, modif: Number(e.target.value) } : cc),
+                          })}
+                        />
+                        <div className="col-span-1 text-center">
+                          <Badge variant="secondary">{calcSeuil(c)}</Badge>
+                        </div>
+                        <Button size="icon" variant="outline" className="col-span-1"
+                          onClick={() => lancerJet(c.nom, calcSeuil(c), 0)}
+                        >
+                          <Dice5 className="h-4 w-4" />
+                        </Button>
+                        <Button size="icon" variant="ghost" className="col-span-1"
+                          onClick={() => updateActive({
+                            ...active,
+                            competences: active.competences.filter((cc) => cc.id !== c.id),
+                          })}
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      </div>
+                    ))}
+                    <Button variant="outline" onClick={() => updateActive({
+                      ...active,
+                      competences: [
+                        ...active.competences,
+                        { id: uid(), nom: "Nouvelle compétence", type: "", base: 50, rang: 0, modif: 0 },
+                      ],
+                    })}>
+                      <Plus className="h-4 w-4 mr-2" /> Ajouter
+                    </Button>
+                  </CardContent>
+                </Card>
+              </TabsContent>
+
+              <TabsContent value="equipement" className="mt-3">
+                <Card>
+                  <CardHeader className="pb-2">
+                    <CardTitle className="text-base">Équipement</CardTitle>
+                  </CardHeader>
+                  <CardContent className="space-y-2">
+                    {active.equipement.map((it) => (
+                      <div key={it.id} className="grid grid-cols-12 gap-2 items-center p-2 border rounded-xl">
+                        <Input className="col-span-4" value={it.nom}
+                          onChange={(e) => updateActive({
+                            ...active,
+                            equipement: active.equipement.map((x) => x.id === it.id ? { ...it, nom: e.target.value } : x),
+                          })}
+                        />
+                        <Input className="col-span-2" placeholder="type" value={it.type}
+                          onChange={(e) => updateActive({
+                            ...active,
+                            equipement: active.equipement.map((x) => x.id === it.id ? { ...it, type: e.target.value } : x),
+                          })}
+                        />
+                        <Input className="col-span-2" type="number" value={it.poids}
+                          onChange={(e) => updateActive({
+                            ...active,
+                            equipement: active.equipement.map((x) => x.id === it.id ? { ...it, poids: Number(e.target.value) } : x),
+                          })}
+                        />
+                        <Input className="col-span-2" type="number" value={it.quantite}
+                          onChange={(e) => updateActive({
+                            ...active,
+                            equipement: active.equipement.map((x) => x.id === it.id ? { ...it, quantite: Number(e.target.value) } : x),
+                          })}
+                        />
+                        <Button size="icon" variant="ghost" className="col-span-1"
+                          onClick={() => updateActive({
+                            ...active,
+                            equipement: active.equipement.filter((x) => x.id !== it.id),
+                          })}
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      </div>
+                    ))}
+                    <Button variant="outline" onClick={() => updateActive({
+                      ...active,
+                      equipement: [
+                        ...active.equipement,
+                        { id: uid(), nom: "Nouvel objet", type: "", poids: 1, quantite: 1 },
+                      ],
+                    })}>
+                      <Plus className="h-4 w-4 mr-2" /> Ajouter
+                    </Button>
+                  </CardContent>
+                </Card>
+              </TabsContent>
+
+              <TabsContent value="relations" className="mt-3">
+                <Card>
+                  <CardHeader className="pb-2">
+                    <CardTitle className="text-base">Relations</CardTitle>
+                  </CardHeader>
+                  <CardContent className="space-y-2">
+                    {active.relations.map((r) => (
+                      <div key={r.id} className="grid grid-cols-12 gap-2 items-center p-2 border rounded-xl">
+                        <Input className="col-span-4" value={r.cible}
+                          onChange={(e) => updateActive({
+                            ...active,
+                            relations: active.relations.map((x) => x.id === r.id ? { ...r, cible: e.target.value } : x),
+                          })}
+                        />
+                        <Input className="col-span-3" placeholder="type" value={r.type}
+                          onChange={(e) => updateActive({
+                            ...active,
+                            relations: active.relations.map((x) => x.id === r.id ? { ...r, type: e.target.value } : x),
+                          })}
+                        />
+                        <Input className="col-span-3" type="number" value={r.intensite}
+                          onChange={(e) => updateActive({
+                            ...active,
+                            relations: active.relations.map((x) => x.id === r.id ? { ...r, intensite: Number(e.target.value) } : x),
+                          })}
+                        />
+                        <Button size="icon" variant="ghost" className="col-span-1"
+                          onClick={() => updateActive({
+                            ...active,
+                            relations: active.relations.filter((x) => x.id !== r.id),
+                          })}
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      </div>
+                    ))}
+                    <Button variant="outline" onClick={() => updateActive({
+                      ...active,
+                      relations: [
+                        ...active.relations,
+                        { id: uid(), cible: "Nouveau contact", type: "allié", intensite: 50 },
+                      ],
+                    })}>
+                      <Plus className="h-4 w-4 mr-2" /> Ajouter
+                    </Button>
+                  </CardContent>
+                </Card>
+              </TabsContent>
+
+              <TabsContent value="jets" className="mt-3">
+                <Card>
+                  <CardHeader className="pb-2">
+                    <CardTitle className="text-base">Jets</CardTitle>
+                  </CardHeader>
+                  <CardContent className="space-y-3">
+                    <div className="grid grid-cols-12 gap-2 items-end">
+                      <div className="col-span-5">
+                        <Label>Cible</Label>
+                        <Input id="cible" placeholder="FOR ou Athlétisme" />
+                      </div>
+                      <div className="col-span-3">
+                        <Label>Base/Seuil ou Bonus</Label>
+                        <Input id="base" type="number" defaultValue={50} />
+                      </div>
+                      <div className="col-span-2">
+                        <Label>Modif</Label>
+                        <Input id="modif" type="number" defaultValue={0} />
+                      </div>
+                      <div className="col-span-2">
+                        <Button className="w-full" onClick={() => {
+                          const cible = (document.getElementById("cible") as HTMLInputElement).value || "Jet";
+                          const base = Number((document.getElementById("base") as HTMLInputElement).value || 0);
+                          const modif = Number((document.getElementById("modif") as HTMLInputElement).value || 0);
+                          lancerJet(cible, base, modif);
+                        }}>
+                          <Dice5 className="h-4 w-4 mr-2" /> Lancer
+                        </Button>
+                      </div>
+                    </div>
+
+                    <div className="space-y-2 max-h-72 overflow-auto">
+                      {active.jets.map((j) => (
+                        <div key={j.id} className="flex items-center justify-between p-2 border rounded-xl">
+                          <div>
+                            <div className="text-sm">{new Date(j.date).toLocaleString()}</div>
+                            <div className="text-xs opacity-70">{j.detail}</div>
+                          </div>
+                          <Badge variant={j.reussite ? "default" : "destructive"}>
+                            {j.reussite ? "OK" : "KO"}
+                          </Badge>
+                        </div>
+                      ))}
+                    </div>
+                  </CardContent>
+                </Card>
+              </TabsContent>
+
+              <TabsContent value="map" className="mt-3">
+                <Card>
+                  <CardHeader className="pb-2">
+                    <CardTitle className="text-base flex items-center gap-2">
+                      <MapPin className="h-4 w-4" /> Carte
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent className="space-y-2">
+                    <div className="h-72 rounded-xl overflow-hidden">
+                      <MapContainer center={[48.8566, 2.3522]} zoom={5} style={{ height: "100%", width: "100%" }}>
+                        <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" attribution="© OpenStreetMap" />
+                        {store.lieux.map((l: Lieu) => (
+                          <Marker key={l.id} position={[l.x, l.y]}>
+                            <Popup>
+                              <div className="space-y-1">
+                                <div className="font-medium">{l.nom}</div>
+                                <div className="text-xs opacity-70">{l.notes}</div>
+                                <Button size="sm" variant="outline" onClick={() => {
+                                  const notes = prompt("Notes pour " + l.nom, l.notes || "") || "";
+                                  const lieux = store.lieux.map((x) => x.id === l.id ? { ...l, notes } : x);
+                                  setStore({ ...store, lieux });
+                                }}>Editer</Button>
+                              </div>
+                            </Popup>
+                          </Marker>
+                        ))}
+                      </MapContainer>
+                    </div>
+                    <div className="grid grid-cols-12 gap-2 items-end">
+                      <Input className="col-span-4" placeholder="Nom du lieu" id="lieu_nom" />
+                      <Input className="col-span-3" placeholder="Lat" id="lieu_lat" type="number" />
+                      <Input className="col-span-3" placeholder="Lng" id="lieu_lng" type="number" />
+                      <Button className="col-span-2" onClick={() => {
+                        const nom = (document.getElementById("lieu_nom") as HTMLInputElement).value;
+                        const x = Number((document.getElementById("lieu_lat") as HTMLInputElement).value);
+                        const y = Number((document.getElementById("lieu_lng") as HTMLInputElement).value);
+                        if (!nom || isNaN(x) || isNaN(y)) { alert("Renseigne nom/lat/lng"); return; }
+                        const l: Lieu = { id: uid(), nom, x, y };
+                        setStore({ ...store, lieux: [...store.lieux, l] });
+                      }}>
+                        <Plus className="h-4 w-4 mr-2" /> Ajouter lieu
+                      </Button>
+                    </div>
+                  </CardContent>
+                </Card>
+              </TabsContent>
+
+              <TabsContent value="json" className="mt-3">
+                <Card>
+                  <CardHeader className="pb-2">
+                    <CardTitle className="text-base flex items-center gap-2">
+                      <FileJson className="h-4 w-4" /> Données brutes
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <pre className="text-xs max-h-80 overflow-auto bg-muted p-2 rounded-xl">{JSON.stringify(active, null, 2)}</pre>
+                  </CardContent>
+                </Card>
+              </TabsContent>
+            </Tabs>
+          </>
+        ) : (
+          <Card className="h-full flex items-center justify-center">
+            <CardContent>
+              <div className="text-center opacity-70">Sélectionne ou crée un personnage pour commencer.</div>
+            </CardContent>
+          </Card>
+        )}
+      </main>
+    </div>
+  );
+}
