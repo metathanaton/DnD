@@ -1,82 +1,55 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Badge } from "@/components/ui/badge";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
-import { Label } from "@/components/ui/label";
-import { Download, Plus, Upload, Trash2, Dice5, MapPin, Save, FileJson } from "lucide-react";
-import { MapContainer, TileLayer, Marker, Popup } from "react-leaflet";
-import L from "leaflet";
+import React, { useEffect, useMemo, useState } from 'react';
 
-// Minimal Leaflet marker icon fix (since default assets may not load in this env)
-const DefaultIcon = new L.Icon({
-  iconUrl:
-    "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png",
-  iconRetinaUrl:
-    "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png",
-  shadowUrl:
-    "https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png",
-  iconSize: [25, 41],
-  iconAnchor: [12, 41],
-  popupAnchor: [1, -34],
-  shadowSize: [41, 41],
-});
-L.Marker.prototype.options.icon = DefaultIcon as any;
+// Version sans dépendances externes (pas de Tailwind, pas de shadcn, pas de Leaflet)
+// Colle ce fichier tel quel dans src/App.tsx d'un projet React + TypeScript (StackBlitz react-ts).
+// Tout fonctionne en localStorage, export/import JSON, jets d100/d20, et une "carte" via liens OpenStreetMap.
 
-// Types
-type Caracs = { FOR: number; DEX: number; CON: number; INT: number; SAG: number; CHA: number };
-
+// Types de données
+type Caracs = {
+  FOR: number;
+  DEX: number;
+  CON: number;
+  INT: number;
+  SAG: number;
+  CHA: number;
+};
 type Competence = {
   id: string;
   nom: string;
-  type: string; // "générale", "martiale", etc.
-  base: number; // valeur de base
-  rang: number; // bonus par rang
-  modif: number; // circonstanciel
+  type: string;
+  base: number;
+  rang: number;
+  modif: number;
 };
-
 type Equipement = {
   id: string;
   nom: string;
-  type: string; // arme, armure, consommable
+  type: string;
   poids: number;
   quantite: number;
   effets?: string;
   equipe?: boolean;
   slot?: string;
 };
-
 type Relation = {
   id: string;
   cible: string;
-  type: string; // allié, ennemi, contact
-  intensite: number; // 0-100
+  type: string;
+  intensite: number;
   notes?: string;
 };
-
 type Jet = {
   id: string;
   date: string;
-  cible: string; // compétence ou carac
+  cible: string;
   base: number;
   modif: number;
-  de: string; // d100/d20
+  de: string;
   resultat: number;
   reussite: boolean;
   detail: string;
 };
-
-type Lieu = {
-  id: string;
-  nom: string;
-  x: number; // lat
-  y: number; // lng
-  notes?: string;
-};
-
+type Lieu = { id: string; nom: string; x: number; y: number; notes?: string };
 type Personnage = {
   id: string;
   nom: string;
@@ -93,623 +66,1018 @@ type Personnage = {
   relations: Relation[];
   jets: Jet[];
 };
+type Store = {
+  persos: Personnage[];
+  lieux: Lieu[];
+  system: 'd100' | 'd20';
+  ddBase: number;
+};
 
-function uid() {
-  return crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2);
-}
-
-function loadStore(): { persos: Personnage[]; lieux: Lieu[]; system: "d100" | "d20"; ddBase: number } {
+// Utilitaires
+const uid = () =>
+  crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2);
+const load = (): Store => {
   try {
-    const raw = localStorage.getItem("rpg_store");
-    if (!raw) return { persos: [], lieux: [], system: "d100", ddBase: 10 };
-    return JSON.parse(raw);
+    const raw = localStorage.getItem('rpg_store');
+    return raw
+      ? JSON.parse(raw)
+      : { persos: [], lieux: [], system: 'd100', ddBase: 10 };
   } catch {
-    return { persos: [], lieux: [], system: "d100", ddBase: 10 };
+    return { persos: [], lieux: [], system: 'd100', ddBase: 10 };
   }
-}
+};
+const save = (data: Store) =>
+  localStorage.setItem('rpg_store', JSON.stringify(data));
+const clamp = (v: number, a: number, b: number) => Math.max(a, Math.min(b, v));
+const calcSeuil = (c: Competence) =>
+  clamp(c.base + c.rang * 5 + c.modif, 0, 100);
+const d = (n: number) => Math.floor(Math.random() * n) + 1;
 
-function saveStore(data: any) {
-  localStorage.setItem("rpg_store", JSON.stringify(data));
-}
+// Styles minimaux en CSS-in-JS pour éviter toute dépendance
+const S: Record<string, React.CSSProperties> = {
+  page: {
+    fontFamily: 'system-ui, Arial, sans-serif',
+    padding: 16,
+    background: '#0b0c0f',
+    color: '#e6e7eb',
+  },
+  grid: { display: 'grid', gridTemplateColumns: '280px 1fr', gap: 12 },
+  card: {
+    background: '#151922',
+    border: '1px solid #242938',
+    borderRadius: 12,
+    padding: 12,
+  },
+  btn: {
+    padding: '8px 12px',
+    background: '#2b3245',
+    color: '#e6e7eb',
+    border: '1px solid #3a4159',
+    borderRadius: 8,
+    cursor: 'pointer',
+  },
+  btnGhost: {
+    padding: '6px 8px',
+    background: 'transparent',
+    color: '#9aa3b2',
+    border: '1px solid #3a4159',
+    borderRadius: 8,
+    cursor: 'pointer',
+  },
+  input: {
+    width: '100%',
+    padding: 8,
+    background: '#0f1320',
+    color: '#e6e7eb',
+    border: '1px solid #2a3144',
+    borderRadius: 8,
+  },
+  label: { fontSize: 12, opacity: 0.8 },
+  listItem: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    padding: 8,
+    border: '1px solid #242938',
+    borderRadius: 10,
+    marginBottom: 6,
+  },
+  badge: {
+    padding: '2px 8px',
+    borderRadius: 999,
+    background: '#24324a',
+    border: '1px solid #38527a',
+    fontSize: 12,
+  },
+  tabs: { display: 'flex', gap: 8, flexWrap: 'wrap' },
+  tabBtn: {
+    padding: '8px 12px',
+    borderRadius: 8,
+    border: '1px solid #3a4159',
+    background: '#101524',
+    color: '#cfd6e4',
+    cursor: 'pointer',
+  },
+  tabBtnActive: {
+    padding: '8px 12px',
+    borderRadius: 8,
+    border: '1px solid #6372a0',
+    background: '#1a2235',
+    color: '#fff',
+    cursor: 'pointer',
+  },
+};
 
-function calcSeuil(c: Competence) {
-  // règle simple: Base + Rang*5 + Modif
-  return Math.max(0, Math.min(100, c.base + c.rang * 5 + c.modif));
-}
-
-function d(n: number) {
-  return Math.floor(Math.random() * n) + 1;
-}
-
-export default function RPGManagerApp() {
-  const [store, setStore] = useState(loadStore());
-  const [activeId, setActiveId] = useState<string | null>(null);
+export default function App() {
+  const [store, setStore] = useState<Store>(load());
+  const [activeId, setActiveId] = useState<string | null>(
+    store.persos[0]?.id || null
+  );
+  const [tab, setTab] = useState<
+    'competences' | 'equipement' | 'relations' | 'jets' | 'map' | 'json'
+  >('competences');
   const active = useMemo(
-    () => store.persos.find((p: Personnage) => p.id === activeId) || null,
+    () => store.persos.find((p) => p.id === activeId) || null,
     [store, activeId]
   );
-
   useEffect(() => {
-    saveStore(store);
+    save(store);
   }, [store]);
 
-  function addPerso() {
+  const setActive = (p: Personnage) =>
+    setStore((s) => ({
+      ...s,
+      persos: s.persos.map((x) => (x.id === p.id ? p : x)),
+    }));
+  const addPerso = () => {
     const p: Personnage = {
       id: uid(),
-      nom: "Nouveau",
-      classe: "",
+      nom: 'Nouveau',
+      classe: '',
       niveau: 1,
       caracs: { FOR: 10, DEX: 10, CON: 10, INT: 10, SAG: 10, CHA: 10 },
       pvMax: 10,
       pv: 10,
       initiative: 0,
       chargeMax: 20,
-      notes: "",
+      notes: '',
       competences: [],
       equipement: [],
       relations: [],
       jets: [],
     };
-    setStore((s: any) => ({ ...s, persos: [...s.persos, p] }));
+    setStore((s) => ({ ...s, persos: [...s.persos, p] }));
     setActiveId(p.id);
-  }
-
-  function removePerso(id: string) {
-    setStore((s: any) => ({ ...s, persos: s.persos.filter((p: Personnage) => p.id !== id) }));
+  };
+  const removePerso = (id: string) => {
+    setStore((s) => ({ ...s, persos: s.persos.filter((p) => p.id !== id) }));
     if (activeId === id) setActiveId(null);
-  }
+  };
 
-  function updateActive(p: Personnage) {
-    setStore((s: any) => ({
-      ...s,
-      persos: s.persos.map((x: Personnage) => (x.id === p.id ? p : x)),
-    }));
-  }
-
-  function exportJSON() {
-    const blob = new Blob([JSON.stringify(store, null, 2)], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `rpg_export_${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-")}.json`;
-    a.click();
-    URL.revokeObjectURL(url);
-  }
-
-  function importJSON(file: File) {
-    const reader = new FileReader();
-    reader.onload = () => {
-      try {
-        const data = JSON.parse(String(reader.result));
-        setStore(data);
-        setActiveId(data.persos?.[0]?.id || null);
-      } catch (e) {
-        alert("Fichier invalide");
-      }
-    };
-    reader.readAsText(file);
-  }
-
-  function lancerJet(
-    cible: string,
-    base: number,
-    modif: number,
-    system: "d100" | "d20" = store.system,
-    ddBase: number = store.ddBase
-  ) {
+  const lancerJet = (cible: string, base: number, modif: number) => {
     if (!active) return;
     const id = uid();
     const now = new Date().toISOString();
-    let resultat = 0;
-    let reussite = false;
-    let detail = "";
-
-    if (system === "d20") {
+    let resultat = 0,
+      reussite = false,
+      detail = '';
+    if (store.system === 'd20') {
       resultat = d(20);
       const total = resultat + base + modif;
-      reussite = total >= ddBase;
-      detail = `d20=${resultat} + base=${base} + modif=${modif} vs DD=${ddBase} => ${total}`;
+      reussite = total >= store.ddBase;
+      detail = `d20=${resultat} + base=${base} + modif=${modif} vs DD=${store.ddBase} => ${total}`;
     } else {
       resultat = d(100);
       const seuil = base + modif;
       reussite = resultat <= seuil;
       detail = `d100=${resultat} <= seuil=${seuil}`;
     }
-
     const jet: Jet = {
       id,
       date: now,
       cible,
       base,
       modif,
-      de: system === "d20" ? "d20" : "d100",
+      de: store.system === 'd20' ? 'd20' : 'd100',
       resultat,
       reussite,
       detail,
     };
+    setActive({ ...active, jets: [jet, ...active.jets] });
+  };
 
-    updateActive({ ...active, jets: [jet, ...active.jets] });
-  }
+  const exportJSON = () => {
+    const blob = new Blob([JSON.stringify(store, null, 2)], {
+      type: 'application/json',
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `rpg_export_${new Date()
+      .toISOString()
+      .slice(0, 19)
+      .replace(/[:T]/g, '-')}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+  const onImport = (f: File) => {
+    const r = new FileReader();
+    r.onload = () => {
+      try {
+        const data = JSON.parse(String(r.result));
+        setStore(data);
+        setActiveId(data.persos?.[0]?.id || null);
+      } catch {
+        alert('Fichier JSON invalide');
+      }
+    };
+    r.readAsText(f);
+  };
 
   return (
-    <div className="min-h-screen w-full grid grid-cols-12 gap-4 p-4">
-      <aside className="col-span-3 space-y-3">
-        <Card className="shadow-md rounded-2xl">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-lg">Personnages</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-2">
-            {store.persos.map((p: Personnage) => (
-              <div
-                key={p.id}
-                className={`flex items-center justify-between p-2 rounded-xl border ${
-                  activeId === p.id ? "bg-muted" : ""
-                }`}
+    <div style={S.page}>
+      <div style={S.grid}>
+        <aside style={S.card}>
+          <h3 style={{ marginTop: 0 }}>Personnages</h3>
+          {store.persos.map((p) => (
+            <div
+              key={p.id}
+              style={{
+                ...S.listItem,
+                background: activeId === p.id ? '#0f1320' : undefined,
+              }}
+            >
+              <button
+                style={{ ...S.btnGhost, border: 'none' }}
+                onClick={() => setActiveId(p.id)}
               >
-                <button className="text-left" onClick={() => setActiveId(p.id)}>
-                  <div className="font-medium">{p.nom || "Sans nom"}</div>
-                  <div className="text-xs opacity-70">{p.classe || "classe"} · niv {p.niveau}</div>
-                </button>
-                <Button variant="ghost" size="icon" onClick={() => removePerso(p.id)}>
-                  <Trash2 className="h-4 w-4" />
-                </Button>
-              </div>
-            ))}
-            <Button className="w-full" onClick={addPerso}>
-              <Plus className="h-4 w-4 mr-2" /> Nouveau perso
-            </Button>
-            <div className="grid grid-cols-2 gap-2 pt-2">
-              <Button variant="outline" onClick={exportJSON}>
-                <Download className="h-4 w-4 mr-2" /> Export
-              </Button>
-              <Dialog>
-                <DialogTrigger asChild>
-                  <Button variant="outline">
-                    <Upload className="h-4 w-4 mr-2" /> Import
-                  </Button>
-                </DialogTrigger>
-                <DialogContent>
-                  <DialogHeader>
-                    <DialogTitle>Importer JSON</DialogTitle>
-                  </DialogHeader>
-                  <Input type="file" accept="application/json" onChange={(e) => {
-                    const f = e.target.files?.[0];
-                    if (f) importJSON(f);
-                  }} />
-                </DialogContent>
-              </Dialog>
+                <div style={{ fontWeight: 600 }}>{p.nom || 'Sans nom'}</div>
+                <div style={{ fontSize: 12, opacity: 0.7 }}>
+                  {p.classe || 'classe'} · niv {p.niveau}
+                </div>
+              </button>
+              <button style={S.btnGhost} onClick={() => removePerso(p.id)}>
+                Supprimer
+              </button>
             </div>
-            <Card className="mt-3">
-              <CardHeader className="pb-2">
-                <CardTitle className="text-base">Système</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-2">
-                <div className="flex items-center gap-2">
-                  <Label className="w-24">Mode</Label>
-                  <select
-                    className="border rounded-md p-2 w-full"
-                    value={store.system}
-                    onChange={(e) => setStore({ ...store, system: e.target.value as any })}
-                  >
-                    <option value="d100">d100 sous seuil</option>
-                    <option value="d20">d20 vs DD</option>
-                  </select>
-                </div>
-                {store.system === "d20" && (
-                  <div className="flex items-center gap-2">
-                    <Label className="w-24">DD de base</Label>
-                    <Input
-                      type="number"
-                      value={store.ddBase}
-                      onChange={(e) => setStore({ ...store, ddBase: Number(e.target.value) })}
+          ))}
+          <button
+            style={{ ...S.btn, width: '100%', marginTop: 6 }}
+            onClick={addPerso}
+          >
+            Nouveau perso
+          </button>
+
+          <div style={{ height: 12 }} />
+          <div style={{ ...S.card }}>
+            <h4 style={{ marginTop: 0 }}>Système</h4>
+            <div
+              style={{
+                display: 'flex',
+                gap: 8,
+                marginBottom: 8,
+                alignItems: 'center',
+              }}
+            >
+              <span style={S.label}>Mode</span>
+              <select
+                style={S.input as any}
+                value={store.system}
+                onChange={(e) =>
+                  setStore({ ...store, system: e.target.value as any })
+                }
+              >
+                <option value="d100">d100 sous seuil</option>
+                <option value="d20">d20 vs DD</option>
+              </select>
+            </div>
+            {store.system === 'd20' && (
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                <span style={S.label}>DD</span>
+                <input
+                  style={S.input}
+                  type="number"
+                  value={store.ddBase}
+                  onChange={(e) =>
+                    setStore({ ...store, ddBase: Number(e.target.value) })
+                  }
+                />
+              </div>
+            )}
+          </div>
+
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: '1fr 1fr',
+              gap: 8,
+              marginTop: 12,
+            }}
+          >
+            <button style={S.btn} onClick={exportJSON}>
+              Export
+            </button>
+            <label style={{ ...S.btn, textAlign: 'center' }}>
+              Import
+              <input
+                type="file"
+                accept="application/json"
+                style={{ display: 'none' }}
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  if (f) onImport(f);
+                }}
+              />
+            </label>
+          </div>
+        </aside>
+
+        <main style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          {active ? (
+            <>
+              <section style={S.card}>
+                <div
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: 'repeat(12, 1fr)',
+                    gap: 8,
+                  }}
+                >
+                  <div style={{ gridColumn: 'span 4' }}>
+                    <div style={S.label}>Nom</div>
+                    <input
+                      style={S.input}
+                      value={active.nom}
+                      onChange={(e) =>
+                        setActive({ ...active, nom: e.target.value })
+                      }
                     />
                   </div>
-                )}
-              </CardContent>
-            </Card>
-          </CardContent>
-        </Card>
-      </aside>
-
-      <main className="col-span-9 space-y-4">
-        {active ? (
-          <>
-            <Card className="shadow-md rounded-2xl">
-              <CardContent className="pt-4 grid grid-cols-12 gap-3">
-                <div className="col-span-4 space-y-2">
-                  <Label>Nom</Label>
-                  <Input
-                    value={active.nom}
-                    onChange={(e) => updateActive({ ...active, nom: e.target.value })}
-                  />
-                </div>
-                <div className="col-span-3 space-y-2">
-                  <Label>Classe</Label>
-                  <Input
-                    value={active.classe}
-                    onChange={(e) => updateActive({ ...active, classe: e.target.value })}
-                  />
-                </div>
-                <div className="col-span-2 space-y-2">
-                  <Label>Niveau</Label>
-                  <Input
-                    type="number"
-                    value={active.niveau}
-                    onChange={(e) => updateActive({ ...active, niveau: Number(e.target.value) })}
-                  />
-                </div>
-                <div className="col-span-3 space-y-2">
-                  <Label>Initiative</Label>
-                  <Input
-                    type="number"
-                    value={active.initiative}
-                    onChange={(e) => updateActive({ ...active, initiative: Number(e.target.value) })}
-                  />
-                </div>
-
-                {/* Caracs */}
-                {(["FOR", "DEX", "CON", "INT", "SAG", "CHA"] as (keyof Caracs)[]).map((k) => (
-                  <div className="col-span-2 space-y-2" key={String(k)}>
-                    <Label>{k}</Label>
-                    <Input
-                      type="number"
-                      value={active.caracs[k]}
-                      onChange={(e) => updateActive({
-                        ...active,
-                        caracs: { ...active.caracs, [k]: Number(e.target.value) },
-                      })}
+                  <div style={{ gridColumn: 'span 3' }}>
+                    <div style={S.label}>Classe</div>
+                    <input
+                      style={S.input}
+                      value={active.classe}
+                      onChange={(e) =>
+                        setActive({ ...active, classe: e.target.value })
+                      }
                     />
                   </div>
-                ))}
+                  <div style={{ gridColumn: 'span 2' }}>
+                    <div style={S.label}>Niveau</div>
+                    <input
+                      style={S.input}
+                      type="number"
+                      value={active.niveau}
+                      onChange={(e) =>
+                        setActive({ ...active, niveau: Number(e.target.value) })
+                      }
+                    />
+                  </div>
+                  <div style={{ gridColumn: 'span 3' }}>
+                    <div style={S.label}>Initiative</div>
+                    <input
+                      style={S.input}
+                      type="number"
+                      value={active.initiative}
+                      onChange={(e) =>
+                        setActive({
+                          ...active,
+                          initiative: Number(e.target.value),
+                        })
+                      }
+                    />
+                  </div>
 
-                <div className="col-span-2 space-y-2">
-                  <Label>PV Max</Label>
-                  <Input
-                    type="number"
-                    value={active.pvMax}
-                    onChange={(e) => updateActive({ ...active, pvMax: Number(e.target.value) })}
-                  />
-                </div>
-                <div className="col-span-2 space-y-2">
-                  <Label>PV</Label>
-                  <Input
-                    type="number"
-                    value={active.pv}
-                    onChange={(e) => updateActive({ ...active, pv: Number(e.target.value) })}
-                  />
-                </div>
-                <div className="col-span-3 space-y-2">
-                  <Label>Charge max</Label>
-                  <Input
-                    type="number"
-                    value={active.chargeMax}
-                    onChange={(e) => updateActive({ ...active, chargeMax: Number(e.target.value) })}
-                  />
-                </div>
-                <div className="col-span-12 space-y-2">
-                  <Label>Notes</Label>
-                  <Textarea
-                    value={active.notes || ""}
-                    onChange={(e) => updateActive({ ...active, notes: e.target.value })}
-                  />
-                </div>
-              </CardContent>
-            </Card>
-
-            <Tabs defaultValue="competences" className="w-full">
-              <TabsList className="grid grid-cols-6 gap-2">
-                <TabsTrigger value="competences">Compétences</TabsTrigger>
-                <TabsTrigger value="equipement">Équipement</TabsTrigger>
-                <TabsTrigger value="relations">Relations</TabsTrigger>
-                <TabsTrigger value="jets">Jets</TabsTrigger>
-                <TabsTrigger value="map">Carte</TabsTrigger>
-                <TabsTrigger value="json">JSON</TabsTrigger>
-              </TabsList>
-
-              <TabsContent value="competences" className="mt-3">
-                <Card className="rounded-2xl">
-                  <CardHeader className="pb-2">
-                    <CardTitle className="text-base">Compétences</CardTitle>
-                  </CardHeader>
-                  <CardContent className="space-y-2">
-                    {active.competences.map((c) => (
-                      <div key={c.id} className="grid grid-cols-12 gap-2 items-center p-2 border rounded-xl">
-                        <Input
-                          className="col-span-3"
-                          value={c.nom}
-                          onChange={(e) => updateActive({
+                  {(Object.keys(active.caracs) as (keyof Caracs)[]).map((k) => (
+                    <div key={String(k)} style={{ gridColumn: 'span 2' }}>
+                      <div style={S.label}>{k}</div>
+                      <input
+                        style={S.input}
+                        type="number"
+                        value={active.caracs[k]}
+                        onChange={(e) =>
+                          setActive({
                             ...active,
-                            competences: active.competences.map((cc) => cc.id === c.id ? { ...c, nom: e.target.value } : cc),
-                          })}
+                            caracs: {
+                              ...active.caracs,
+                              [k]: Number(e.target.value),
+                            },
+                          })
+                        }
+                      />
+                    </div>
+                  ))}
+
+                  <div style={{ gridColumn: 'span 2' }}>
+                    <div style={S.label}>PV Max</div>
+                    <input
+                      style={S.input}
+                      type="number"
+                      value={active.pvMax}
+                      onChange={(e) =>
+                        setActive({ ...active, pvMax: Number(e.target.value) })
+                      }
+                    />
+                  </div>
+                  <div style={{ gridColumn: 'span 2' }}>
+                    <div style={S.label}>PV</div>
+                    <input
+                      style={S.input}
+                      type="number"
+                      value={active.pv}
+                      onChange={(e) =>
+                        setActive({ ...active, pv: Number(e.target.value) })
+                      }
+                    />
+                  </div>
+                  <div style={{ gridColumn: 'span 3' }}>
+                    <div style={S.label}>Charge max</div>
+                    <input
+                      style={S.input}
+                      type="number"
+                      value={active.chargeMax}
+                      onChange={(e) =>
+                        setActive({
+                          ...active,
+                          chargeMax: Number(e.target.value),
+                        })
+                      }
+                    />
+                  </div>
+                  <div style={{ gridColumn: 'span 12' }}>
+                    <div style={S.label}>Notes</div>
+                    <textarea
+                      style={{ ...S.input, height: 70 }}
+                      value={active.notes || ''}
+                      onChange={(e) =>
+                        setActive({ ...active, notes: e.target.value })
+                      }
+                    />
+                  </div>
+                </div>
+              </section>
+
+              <section style={S.card}>
+                <div style={S.tabs}>
+                  {(
+                    [
+                      'competences',
+                      'equipement',
+                      'relations',
+                      'jets',
+                      'map',
+                      'json',
+                    ] as const
+                  ).map((t) => (
+                    <button
+                      key={t}
+                      style={tab === t ? S.tabBtnActive : S.tabBtn}
+                      onClick={() => setTab(t)}
+                    >
+                      {t}
+                    </button>
+                  ))}
+                </div>
+
+                {tab === 'competences' && (
+                  <div style={{ marginTop: 10 }}>
+                    {active.competences.map((c) => (
+                      <div key={c.id} style={S.listItem}>
+                        <input
+                          style={{ ...S.input, width: 160 }}
+                          value={c.nom}
+                          onChange={(e) =>
+                            setActive({
+                              ...active,
+                              competences: active.competences.map((x) =>
+                                x.id === c.id
+                                  ? { ...c, nom: e.target.value }
+                                  : x
+                              ),
+                            })
+                          }
                         />
-                        <Input
-                          className="col-span-2"
+                        <input
+                          style={{ ...S.input, width: 120 }}
                           placeholder="type"
                           value={c.type}
-                          onChange={(e) => updateActive({
-                            ...active,
-                            competences: active.competences.map((cc) => cc.id === c.id ? { ...c, type: e.target.value } : cc),
-                          })}
+                          onChange={(e) =>
+                            setActive({
+                              ...active,
+                              competences: active.competences.map((x) =>
+                                x.id === c.id
+                                  ? { ...c, type: e.target.value }
+                                  : x
+                              ),
+                            })
+                          }
                         />
-                        <Input
+                        <input
+                          style={{ ...S.input, width: 80 }}
                           type="number"
-                          className="col-span-2"
                           value={c.base}
-                          onChange={(e) => updateActive({
-                            ...active,
-                            competences: active.competences.map((cc) => cc.id === c.id ? { ...c, base: Number(e.target.value) } : cc),
-                          })}
+                          onChange={(e) =>
+                            setActive({
+                              ...active,
+                              competences: active.competences.map((x) =>
+                                x.id === c.id
+                                  ? { ...c, base: Number(e.target.value) }
+                                  : x
+                              ),
+                            })
+                          }
                         />
-                        <Input
+                        <input
+                          style={{ ...S.input, width: 80 }}
                           type="number"
-                          className="col-span-2"
                           value={c.rang}
-                          onChange={(e) => updateActive({
-                            ...active,
-                            competences: active.competences.map((cc) => cc.id === c.id ? { ...c, rang: Number(e.target.value) } : cc),
-                          })}
+                          onChange={(e) =>
+                            setActive({
+                              ...active,
+                              competences: active.competences.map((x) =>
+                                x.id === c.id
+                                  ? { ...c, rang: Number(e.target.value) }
+                                  : x
+                              ),
+                            })
+                          }
                         />
-                        <Input
+                        <input
+                          style={{ ...S.input, width: 70 }}
                           type="number"
-                          className="col-span-1"
                           value={c.modif}
-                          onChange={(e) => updateActive({
-                            ...active,
-                            competences: active.competences.map((cc) => cc.id === c.id ? { ...c, modif: Number(e.target.value) } : cc),
-                          })}
+                          onChange={(e) =>
+                            setActive({
+                              ...active,
+                              competences: active.competences.map((x) =>
+                                x.id === c.id
+                                  ? { ...c, modif: Number(e.target.value) }
+                                  : x
+                              ),
+                            })
+                          }
                         />
-                        <div className="col-span-1 text-center">
-                          <Badge variant="secondary">{calcSeuil(c)}</Badge>
-                        </div>
-                        <Button size="icon" variant="outline" className="col-span-1"
+                        <span style={S.badge}>{calcSeuil(c)}</span>
+                        <button
+                          style={S.btn}
                           onClick={() => lancerJet(c.nom, calcSeuil(c), 0)}
                         >
-                          <Dice5 className="h-4 w-4" />
-                        </Button>
-                        <Button size="icon" variant="ghost" className="col-span-1"
-                          onClick={() => updateActive({
-                            ...active,
-                            competences: active.competences.filter((cc) => cc.id !== c.id),
-                          })}
+                          Lancer
+                        </button>
+                        <button
+                          style={S.btnGhost}
+                          onClick={() =>
+                            setActive({
+                              ...active,
+                              competences: active.competences.filter(
+                                (x) => x.id !== c.id
+                              ),
+                            })
+                          }
                         >
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
+                          Supprimer
+                        </button>
                       </div>
                     ))}
-                    <Button variant="outline" onClick={() => updateActive({
-                      ...active,
-                      competences: [
-                        ...active.competences,
-                        { id: uid(), nom: "Nouvelle compétence", type: "", base: 50, rang: 0, modif: 0 },
-                      ],
-                    })}>
-                      <Plus className="h-4 w-4 mr-2" /> Ajouter
-                    </Button>
-                  </CardContent>
-                </Card>
-              </TabsContent>
+                    <button
+                      style={S.btn}
+                      onClick={() =>
+                        setActive({
+                          ...active,
+                          competences: [
+                            ...active.competences,
+                            {
+                              id: uid(),
+                              nom: 'Nouvelle compétence',
+                              type: '',
+                              base: 50,
+                              rang: 0,
+                              modif: 0,
+                            },
+                          ],
+                        })
+                      }
+                    >
+                      Ajouter
+                    </button>
+                  </div>
+                )}
 
-              <TabsContent value="equipement" className="mt-3">
-                <Card>
-                  <CardHeader className="pb-2">
-                    <CardTitle className="text-base">Équipement</CardTitle>
-                  </CardHeader>
-                  <CardContent className="space-y-2">
+                {tab === 'equipement' && (
+                  <div style={{ marginTop: 10 }}>
                     {active.equipement.map((it) => (
-                      <div key={it.id} className="grid grid-cols-12 gap-2 items-center p-2 border rounded-xl">
-                        <Input className="col-span-4" value={it.nom}
-                          onChange={(e) => updateActive({
-                            ...active,
-                            equipement: active.equipement.map((x) => x.id === it.id ? { ...it, nom: e.target.value } : x),
-                          })}
+                      <div key={it.id} style={S.listItem}>
+                        <input
+                          style={{ ...S.input, width: 200 }}
+                          value={it.nom}
+                          onChange={(e) =>
+                            setActive({
+                              ...active,
+                              equipement: active.equipement.map((x) =>
+                                x.id === it.id
+                                  ? { ...it, nom: e.target.value }
+                                  : x
+                              ),
+                            })
+                          }
                         />
-                        <Input className="col-span-2" placeholder="type" value={it.type}
-                          onChange={(e) => updateActive({
-                            ...active,
-                            equipement: active.equipement.map((x) => x.id === it.id ? { ...it, type: e.target.value } : x),
-                          })}
+                        <input
+                          style={{ ...S.input, width: 110 }}
+                          placeholder="type"
+                          value={it.type}
+                          onChange={(e) =>
+                            setActive({
+                              ...active,
+                              equipement: active.equipement.map((x) =>
+                                x.id === it.id
+                                  ? { ...it, type: e.target.value }
+                                  : x
+                              ),
+                            })
+                          }
                         />
-                        <Input className="col-span-2" type="number" value={it.poids}
-                          onChange={(e) => updateActive({
-                            ...active,
-                            equipement: active.equipement.map((x) => x.id === it.id ? { ...it, poids: Number(e.target.value) } : x),
-                          })}
+                        <input
+                          style={{ ...S.input, width: 80 }}
+                          type="number"
+                          value={it.poids}
+                          onChange={(e) =>
+                            setActive({
+                              ...active,
+                              equipement: active.equipement.map((x) =>
+                                x.id === it.id
+                                  ? { ...it, poids: Number(e.target.value) }
+                                  : x
+                              ),
+                            })
+                          }
                         />
-                        <Input className="col-span-2" type="number" value={it.quantite}
-                          onChange={(e) => updateActive({
-                            ...active,
-                            equipement: active.equipement.map((x) => x.id === it.id ? { ...it, quantite: Number(e.target.value) } : x),
-                          })}
+                        <input
+                          style={{ ...S.input, width: 80 }}
+                          type="number"
+                          value={it.quantite}
+                          onChange={(e) =>
+                            setActive({
+                              ...active,
+                              equipement: active.equipement.map((x) =>
+                                x.id === it.id
+                                  ? { ...it, quantite: Number(e.target.value) }
+                                  : x
+                              ),
+                            })
+                          }
                         />
-                        <Button size="icon" variant="ghost" className="col-span-1"
-                          onClick={() => updateActive({
-                            ...active,
-                            equipement: active.equipement.filter((x) => x.id !== it.id),
-                          })}
+                        <button
+                          style={S.btnGhost}
+                          onClick={() =>
+                            setActive({
+                              ...active,
+                              equipement: active.equipement.filter(
+                                (x) => x.id !== it.id
+                              ),
+                            })
+                          }
                         >
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
+                          Supprimer
+                        </button>
                       </div>
                     ))}
-                    <Button variant="outline" onClick={() => updateActive({
-                      ...active,
-                      equipement: [
-                        ...active.equipement,
-                        { id: uid(), nom: "Nouvel objet", type: "", poids: 1, quantite: 1 },
-                      ],
-                    })}>
-                      <Plus className="h-4 w-4 mr-2" /> Ajouter
-                    </Button>
-                  </CardContent>
-                </Card>
-              </TabsContent>
+                    <button
+                      style={S.btn}
+                      onClick={() =>
+                        setActive({
+                          ...active,
+                          equipement: [
+                            ...active.equipement,
+                            {
+                              id: uid(),
+                              nom: 'Nouvel objet',
+                              type: '',
+                              poids: 1,
+                              quantite: 1,
+                            },
+                          ],
+                        })
+                      }
+                    >
+                      Ajouter
+                    </button>
+                  </div>
+                )}
 
-              <TabsContent value="relations" className="mt-3">
-                <Card>
-                  <CardHeader className="pb-2">
-                    <CardTitle className="text-base">Relations</CardTitle>
-                  </CardHeader>
-                  <CardContent className="space-y-2">
+                {tab === 'relations' && (
+                  <div style={{ marginTop: 10 }}>
                     {active.relations.map((r) => (
-                      <div key={r.id} className="grid grid-cols-12 gap-2 items-center p-2 border rounded-xl">
-                        <Input className="col-span-4" value={r.cible}
-                          onChange={(e) => updateActive({
-                            ...active,
-                            relations: active.relations.map((x) => x.id === r.id ? { ...r, cible: e.target.value } : x),
-                          })}
+                      <div key={r.id} style={S.listItem}>
+                        <input
+                          style={{ ...S.input, width: 200 }}
+                          value={r.cible}
+                          onChange={(e) =>
+                            setActive({
+                              ...active,
+                              relations: active.relations.map((x) =>
+                                x.id === r.id
+                                  ? { ...r, cible: e.target.value }
+                                  : x
+                              ),
+                            })
+                          }
                         />
-                        <Input className="col-span-3" placeholder="type" value={r.type}
-                          onChange={(e) => updateActive({
-                            ...active,
-                            relations: active.relations.map((x) => x.id === r.id ? { ...r, type: e.target.value } : x),
-                          })}
+                        <input
+                          style={{ ...S.input, width: 120 }}
+                          placeholder="type"
+                          value={r.type}
+                          onChange={(e) =>
+                            setActive({
+                              ...active,
+                              relations: active.relations.map((x) =>
+                                x.id === r.id
+                                  ? { ...r, type: e.target.value }
+                                  : x
+                              ),
+                            })
+                          }
                         />
-                        <Input className="col-span-3" type="number" value={r.intensite}
-                          onChange={(e) => updateActive({
-                            ...active,
-                            relations: active.relations.map((x) => x.id === r.id ? { ...r, intensite: Number(e.target.value) } : x),
-                          })}
+                        <input
+                          style={{ ...S.input, width: 100 }}
+                          type="number"
+                          value={r.intensite}
+                          onChange={(e) =>
+                            setActive({
+                              ...active,
+                              relations: active.relations.map((x) =>
+                                x.id === r.id
+                                  ? { ...r, intensite: Number(e.target.value) }
+                                  : x
+                              ),
+                            })
+                          }
                         />
-                        <Button size="icon" variant="ghost" className="col-span-1"
-                          onClick={() => updateActive({
-                            ...active,
-                            relations: active.relations.filter((x) => x.id !== r.id),
-                          })}
+                        <button
+                          style={S.btnGhost}
+                          onClick={() =>
+                            setActive({
+                              ...active,
+                              relations: active.relations.filter(
+                                (x) => x.id !== r.id
+                              ),
+                            })
+                          }
                         >
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
+                          Supprimer
+                        </button>
                       </div>
                     ))}
-                    <Button variant="outline" onClick={() => updateActive({
-                      ...active,
-                      relations: [
-                        ...active.relations,
-                        { id: uid(), cible: "Nouveau contact", type: "allié", intensite: 50 },
-                      ],
-                    })}>
-                      <Plus className="h-4 w-4 mr-2" /> Ajouter
-                    </Button>
-                  </CardContent>
-                </Card>
-              </TabsContent>
+                    <button
+                      style={S.btn}
+                      onClick={() =>
+                        setActive({
+                          ...active,
+                          relations: [
+                            ...active.relations,
+                            {
+                              id: uid(),
+                              cible: 'Nouveau contact',
+                              type: 'allié',
+                              intensite: 50,
+                            },
+                          ],
+                        })
+                      }
+                    >
+                      Ajouter
+                    </button>
+                  </div>
+                )}
 
-              <TabsContent value="jets" className="mt-3">
-                <Card>
-                  <CardHeader className="pb-2">
-                    <CardTitle className="text-base">Jets</CardTitle>
-                  </CardHeader>
-                  <CardContent className="space-y-3">
-                    <div className="grid grid-cols-12 gap-2 items-end">
-                      <div className="col-span-5">
-                        <Label>Cible</Label>
-                        <Input id="cible" placeholder="FOR ou Athlétisme" />
+                {tab === 'jets' && (
+                  <div style={{ marginTop: 10 }}>
+                    <div
+                      style={{
+                        display: 'grid',
+                        gridTemplateColumns: '1fr 160px 120px 120px',
+                        gap: 8,
+                        alignItems: 'end',
+                      }}
+                    >
+                      <div>
+                        <div style={S.label}>Cible</div>
+                        <input
+                          id="cible"
+                          style={S.input}
+                          placeholder="FOR ou Athlétisme"
+                        />
                       </div>
-                      <div className="col-span-3">
-                        <Label>Base/Seuil ou Bonus</Label>
-                        <Input id="base" type="number" defaultValue={50} />
+                      <div>
+                        <div style={S.label}>Base/Seuil ou Bonus</div>
+                        <input
+                          id="base"
+                          style={S.input}
+                          type="number"
+                          defaultValue={50}
+                        />
                       </div>
-                      <div className="col-span-2">
-                        <Label>Modif</Label>
-                        <Input id="modif" type="number" defaultValue={0} />
+                      <div>
+                        <div style={S.label}>Modif</div>
+                        <input
+                          id="modif"
+                          style={S.input}
+                          type="number"
+                          defaultValue={0}
+                        />
                       </div>
-                      <div className="col-span-2">
-                        <Button className="w-full" onClick={() => {
-                          const cible = (document.getElementById("cible") as HTMLInputElement).value || "Jet";
-                          const base = Number((document.getElementById("base") as HTMLInputElement).value || 0);
-                          const modif = Number((document.getElementById("modif") as HTMLInputElement).value || 0);
+                      <button
+                        style={S.btn}
+                        onClick={() => {
+                          const cible =
+                            (
+                              document.getElementById(
+                                'cible'
+                              ) as HTMLInputElement
+                            ).value || 'Jet';
+                          const base = Number(
+                            (
+                              document.getElementById(
+                                'base'
+                              ) as HTMLInputElement
+                            ).value || 0
+                          );
+                          const modif = Number(
+                            (
+                              document.getElementById(
+                                'modif'
+                              ) as HTMLInputElement
+                            ).value || 0
+                          );
                           lancerJet(cible, base, modif);
-                        }}>
-                          <Dice5 className="h-4 w-4 mr-2" /> Lancer
-                        </Button>
-                      </div>
+                        }}
+                      >
+                        Lancer
+                      </button>
                     </div>
 
-                    <div className="space-y-2 max-h-72 overflow-auto">
+                    <div
+                      style={{
+                        marginTop: 10,
+                        maxHeight: 320,
+                        overflow: 'auto',
+                        display: 'grid',
+                        gap: 6,
+                      }}
+                    >
                       {active.jets.map((j) => (
-                        <div key={j.id} className="flex items-center justify-between p-2 border rounded-xl">
+                        <div key={j.id} style={S.listItem}>
                           <div>
-                            <div className="text-sm">{new Date(j.date).toLocaleString()}</div>
-                            <div className="text-xs opacity-70">{j.detail}</div>
+                            <div style={{ fontSize: 13 }}>
+                              {new Date(j.date).toLocaleString()}
+                            </div>
+                            <div style={{ fontSize: 12, opacity: 0.7 }}>
+                              {j.detail}
+                            </div>
                           </div>
-                          <Badge variant={j.reussite ? "default" : "destructive"}>
-                            {j.reussite ? "OK" : "KO"}
-                          </Badge>
+                          <span
+                            style={{
+                              ...S.badge,
+                              background: j.reussite ? '#193a27' : '#402325',
+                              borderColor: j.reussite ? '#2a6a45' : '#6b2c2f',
+                            }}
+                          >
+                            {j.reussite ? 'OK' : 'KO'}
+                          </span>
                         </div>
                       ))}
                     </div>
-                  </CardContent>
-                </Card>
-              </TabsContent>
+                  </div>
+                )}
 
-              <TabsContent value="map" className="mt-3">
-                <Card>
-                  <CardHeader className="pb-2">
-                    <CardTitle className="text-base flex items-center gap-2">
-                      <MapPin className="h-4 w-4" /> Carte
-                    </CardTitle>
-                  </CardHeader>
-                  <CardContent className="space-y-2">
-                    <div className="h-72 rounded-xl overflow-hidden">
-                      <MapContainer center={[48.8566, 2.3522]} zoom={5} style={{ height: "100%", width: "100%" }}>
-                        <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" attribution="© OpenStreetMap" />
-                        {store.lieux.map((l: Lieu) => (
-                          <Marker key={l.id} position={[l.x, l.y]}>
-                            <Popup>
-                              <div className="space-y-1">
-                                <div className="font-medium">{l.nom}</div>
-                                <div className="text-xs opacity-70">{l.notes}</div>
-                                <Button size="sm" variant="outline" onClick={() => {
-                                  const notes = prompt("Notes pour " + l.nom, l.notes || "") || "";
-                                  const lieux = store.lieux.map((x) => x.id === l.id ? { ...l, notes } : x);
-                                  setStore({ ...store, lieux });
-                                }}>Editer</Button>
-                              </div>
-                            </Popup>
-                          </Marker>
-                        ))}
-                      </MapContainer>
-                    </div>
-                    <div className="grid grid-cols-12 gap-2 items-end">
-                      <Input className="col-span-4" placeholder="Nom du lieu" id="lieu_nom" />
-                      <Input className="col-span-3" placeholder="Lat" id="lieu_lat" type="number" />
-                      <Input className="col-span-3" placeholder="Lng" id="lieu_lng" type="number" />
-                      <Button className="col-span-2" onClick={() => {
-                        const nom = (document.getElementById("lieu_nom") as HTMLInputElement).value;
-                        const x = Number((document.getElementById("lieu_lat") as HTMLInputElement).value);
-                        const y = Number((document.getElementById("lieu_lng") as HTMLInputElement).value);
-                        if (!nom || isNaN(x) || isNaN(y)) { alert("Renseigne nom/lat/lng"); return; }
-                        const l: Lieu = { id: uid(), nom, x, y };
-                        setStore({ ...store, lieux: [...store.lieux, l] });
-                      }}>
-                        <Plus className="h-4 w-4 mr-2" /> Ajouter lieu
-                      </Button>
-                    </div>
-                  </CardContent>
-                </Card>
-              </TabsContent>
+                {tab === 'map' && (
+                  <div style={{ marginTop: 10 }}>
+                    <p>
+                      Version sans dépendances: on affiche la liste des lieux et
+                      un lien pour ouvrir sur OpenStreetMap.
+                    </p>
+                    {store.lieux.map((l) => (
+                      <div key={l.id} style={S.listItem}>
+                        <div>
+                          <div style={{ fontWeight: 600 }}>{l.nom}</div>
+                          <div style={{ fontSize: 12, opacity: 0.7 }}>
+                            {l.x.toFixed(5)}, {l.y.toFixed(5)}
+                          </div>
+                        </div>
+                        <div style={{ display: 'flex', gap: 8 }}>
+                          <a
+                            style={S.btn as any}
+                            href={`https://www.openstreetmap.org/?mlat=${l.x}&mlon=${l.y}#map=14/${l.x}/${l.y}`}
+                            target="_blank"
+                            rel="noreferrer"
+                          >
+                            Ouvrir
+                          </a>
+                          <button
+                            style={S.btnGhost}
+                            onClick={() => {
+                              const notes =
+                                prompt('Notes', l.notes || '') || '';
+                              setStore({
+                                ...store,
+                                lieux: store.lieux.map((x) =>
+                                  x.id === l.id ? { ...l, notes } : x
+                                ),
+                              });
+                            }}
+                          >
+                            Editer
+                          </button>
+                          <button
+                            style={S.btnGhost}
+                            onClick={() =>
+                              setStore({
+                                ...store,
+                                lieux: store.lieux.filter((x) => x.id !== l.id),
+                              })
+                            }
+                          >
+                            Supprimer
+                          </button>
+                        </div>
+                      </div>
+                    ))}
 
-              <TabsContent value="json" className="mt-3">
-                <Card>
-                  <CardHeader className="pb-2">
-                    <CardTitle className="text-base flex items-center gap-2">
-                      <FileJson className="h-4 w-4" /> Données brutes
-                    </CardTitle>
-                  </CardHeader>
-                  <CardContent>
-                    <pre className="text-xs max-h-80 overflow-auto bg-muted p-2 rounded-xl">{JSON.stringify(active, null, 2)}</pre>
-                  </CardContent>
-                </Card>
-              </TabsContent>
-            </Tabs>
-          </>
-        ) : (
-          <Card className="h-full flex items-center justify-center">
-            <CardContent>
-              <div className="text-center opacity-70">Sélectionne ou crée un personnage pour commencer.</div>
-            </CardContent>
-          </Card>
-        )}
-      </main>
+                    <div
+                      style={{
+                        display: 'grid',
+                        gridTemplateColumns: '2fr 1fr 1fr auto',
+                        gap: 8,
+                      }}
+                    >
+                      <input
+                        id="lieu_nom"
+                        style={S.input}
+                        placeholder="Nom du lieu"
+                      />
+                      <input
+                        id="lieu_lat"
+                        style={S.input}
+                        type="number"
+                        placeholder="Lat"
+                      />
+                      <input
+                        id="lieu_lng"
+                        style={S.input}
+                        type="number"
+                        placeholder="Lng"
+                      />
+                      <button
+                        style={S.btn}
+                        onClick={() => {
+                          const nom = (
+                            document.getElementById(
+                              'lieu_nom'
+                            ) as HTMLInputElement
+                          ).value;
+                          const x = Number(
+                            (
+                              document.getElementById(
+                                'lieu_lat'
+                              ) as HTMLInputElement
+                            ).value
+                          );
+                          const y = Number(
+                            (
+                              document.getElementById(
+                                'lieu_lng'
+                              ) as HTMLInputElement
+                            ).value
+                          );
+                          if (!nom || isNaN(x) || isNaN(y)) {
+                            alert('Renseigne nom/lat/lng');
+                            return;
+                          }
+                          setStore({
+                            ...store,
+                            lieux: [...store.lieux, { id: uid(), nom, x, y }],
+                          });
+                        }}
+                      >
+                        Ajouter
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {tab === 'json' && (
+                  <pre
+                    style={{
+                      marginTop: 10,
+                      padding: 10,
+                      background: '#0f1320',
+                      border: '1px solid #2a3144',
+                      borderRadius: 10,
+                      maxHeight: 340,
+                      overflow: 'auto',
+                      fontSize: 12,
+                    }}
+                  >
+                    {JSON.stringify(active, null, 2)}
+                  </pre>
+                )}
+              </section>
+            </>
+          ) : (
+            <section
+              style={{
+                ...S.card,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                minHeight: 200,
+              }}
+            >
+              <div>Crée un personnage pour commencer</div>
+            </section>
+          )}
+        </main>
+      </div>
     </div>
   );
 }
